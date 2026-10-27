@@ -1,0 +1,231 @@
+name: Build Teacher Smart Whiteboard APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Java (JDK 17)
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Accept Android Licenses & Build APK
+      run: |
+        yes | sdkmanager --licenses || true
+        npm install -g cordova
+        cordova create teacherApp com.teacher.smartboard TeacherSmartBoard
+        cd teacherApp
+        cordova platform add android
+        
+        # ఆటోమేటిక్‌గా పూర్తి వైట్‌బోర్డ్ కోడ్‌ను సృష్టించడం
+        cat << 'EOF' > www/index.html
+        <!DOCTYPE html>
+        <html lang="te">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+            <title>Teacher Smart Whiteboard</title>
+            <style>
+                * { box-sizing: border-box; touch-action: none; }
+                body { font-family: Arial, sans-serif; background-color: #1e1e2f; color: #fff; margin: 0; padding: 8px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+                header { background: #2d2d44; padding: 8px 12px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #3f3f5e; }
+                .profile { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+                .profile img { width: 50px; height: 50px; border-radius: 50%; border: 2px solid #4e9f3d; object-fit: cover; background: #555; }
+                .profile-title h3 { margin: 0; color: #4e9f3d; font-size: 16px; }
+                .profile-title p { margin: 0; font-size: 11px; color: #aaa; }
+                .toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; background: #2d2d44; padding: 8px; border-radius: 8px; }
+                button { background: #3f3f5e; color: white; border: none; padding: 6px 10px; font-size: 13px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+                button.active, button:active { background: #4e9f3d; }
+                .canvas-container { flex: 1; position: relative; background: #ffffff; border-radius: 8px; overflow: hidden; border: 2px solid #4e9f3d; }
+                canvas { width: 100%; height: 100%; display: block; background: #ffffff; }
+                .output-panel { background: #2d2d44; padding: 8px; border-radius: 8px; margin-top: 8px; min-height: 50px; font-size: 15px; border: 1px solid #3f3f5e; color: #00ffcc; word-wrap: break-word; }
+            </style>
+        </head>
+        <body>
+            <header>
+                <div class="profile" onclick="document.getElementById('photoInput').click()">
+                    <img id="teacherPhoto" src="https://via.placeholder.com/50?text=Photo" alt="Teacher">
+                    <input type="file" id="photoInput" accept="image/*" style="display:none" onchange="loadPhoto(event)">
+                    <div class="profile-title">
+                        <h3>డిజిటల్ స్మార్ట్ బోర్డు</h3>
+                        <p>(ఫోటో మార్చడానికి ఇక్కడ నొక్కండి)</p>
+                    </div>
+                </div>
+                <div>
+                    <button onclick="clearBoard()" style="background:#d9534f;">🗑️ క్లియర్</button>
+                </div>
+            </header>
+
+            <div class="toolbar">
+                <button id="penBtn" class="active" onclick="setTool('pen')">✏️ పెన్</button>
+                <button id="eraserBtn" onclick="setTool('eraser')">🧹 ఎరేజర్</button>
+                <button onclick="insertSymbol('+')">+</button>
+                <button onclick="insertSymbol('-')">-</button>
+                <button onclick="insertSymbol('x²')">x²</button>
+                <button onclick="insertSymbol('√x')">√</button>
+                <button onclick="insertSymbol('H₂O')">H₂O</button>
+                <button onclick="insertSymbol('CO₂')">CO₂</button>
+                <button onclick="toggleSpeech()" id="micBtn" style="background:#0275d8;">🎤 వాయిస్ (EN)</button>
+                <button onclick="copyText()">📋 కాపీ</button>
+                <button onclick="pasteText()">📥 పేస్ట్</button>
+                <button onclick="saveBoard()" style="background:#5cb85c;">💾 సేవ్</button>
+            </div>
+
+            <div class="canvas-container">
+                <canvas id="board"></canvas>
+            </div>
+
+            <div class="output-panel" id="textOutput">
+                <b>అవుట్‌పుట్:</b> <span id="recognizedText">ఇక్కడ టెక్స్ట్ వస్తుంది...</span>
+            </div>
+
+            <script>
+                const canvas = document.getElementById('board');
+                const ctx = canvas.getContext('2d');
+                let drawing = false;
+                let currentTool = 'pen';
+
+                function resizeCanvas() {
+                    canvas.width = canvas.parentElement.clientWidth;
+                    canvas.height = canvas.parentElement.clientHeight;
+                }
+                window.addEventListener('resize', resizeCanvas);
+                setTimeout(resizeCanvas, 300);
+
+                window.onload = function() {
+                    const savedPhoto = localStorage.getItem('teacher_photo');
+                    if(savedPhoto) {
+                        document.getElementById('teacherPhoto').src = savedPhoto;
+                    }
+                }
+
+                function loadPhoto(event) {
+                    const reader = new FileReader();
+                    reader.onload = function(){
+                        const base64String = reader.result;
+                        document.getElementById('teacherPhoto').src = base64String;
+                        localStorage.setItem('teacher_photo', base64String);
+                    }
+                    reader.readAsDataURL(event.target.files[0]);
+                }
+
+                function setTool(tool) {
+                    currentTool = tool;
+                    document.getElementById('penBtn').classList.toggle('active', tool === 'pen');
+                    document.getElementById('eraserBtn').classList.toggle('active', tool === 'eraser');
+                }
+
+                function startDraw(e) {
+                    drawing = true;
+                    draw(e);
+                }
+
+                function endDraw() {
+                    drawing = false;
+                    ctx.beginPath();
+                }
+
+                function draw(e) {
+                    if (!drawing) return;
+                    const rect = canvas.getBoundingClientRect();
+                    const x = (e.clientX || e.touches[0].clientX) - rect.left;
+                    const y = (e.clientY || e.touches[0].clientY) - rect.top;
+
+                    ctx.lineWidth = currentTool === 'pen' ? 3 : 35;
+                    ctx.lineCap = 'round';
+                    ctx.strokeStyle = currentTool === 'pen' ? '#000000' : '#ffffff';
+                    ctx.globalCompositeOperation = 'source-over';
+
+                    ctx.lineTo(x, y);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(x, y);
+                }
+
+                canvas.addEventListener('mousedown', startDraw);
+                canvas.addEventListener('mouseup', endDraw);
+                canvas.addEventListener('mousemove', draw);
+
+                canvas.addEventListener('touchstart', (e) => { startDraw(e); e.preventDefault(); });
+                canvas.addEventListener('touchend', endDraw);
+                canvas.addEventListener('touchmove', (e) => { draw(e); e.preventDefault(); });
+
+                function clearBoard() {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+
+                function insertSymbol(sym) {
+                    document.getElementById('recognizedText').innerText += ' ' + sym;
+                }
+
+                let recognition;
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    recognition = new Speech();
+                    recognition.continuous = true;
+                    recognition.lang = 'en-US';
+                    recognition.onresult = (event) => {
+                        let text = '';
+                        for (let i = event.resultIndex; i < event.results.length; ++i) {
+                            text += event.results[i][0].transcript;
+                        }
+                        document.getElementById('recognizedText').innerText = text;
+                    };
+                }
+
+                window.toggleSpeech = function() {
+                    if (recognition) {
+                        recognition.start();
+                        alert("వాయిస్ రికగ్నిషన్ ప్రారంభమైంది...");
+                    } else {
+                        alert("వాయిస్ సపోర్ట్ లేదు.");
+                    }
+                };
+
+                function copyText() {
+                    const text = document.getElementById('recognizedText').innerText;
+                    navigator.clipboard.writeText(text);
+                    alert("టెక్స్ట్ కాపీ చేయబడింది!");
+                }
+
+                async function pasteText() {
+                    const text = await navigator.clipboard.readText();
+                    document.getElementById('recognizedText').innerText = text;
+                }
+
+                function saveBoard() {
+                    const link = document.createElement('a');
+                    link.download = 'board-notes.png';
+                    link.href = canvas.toDataURL();
+                    link.click();
+                }
+            </script>
+        </body>
+        </html>
+        EOF
+        
+        cordova build android --debug
+
+    - name: Upload Finished APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: Teacher-Smart-Whiteboard-APK
+        path: teacherApp/platforms/android/app/build/outputs/apk/debug/app-debug.apk
